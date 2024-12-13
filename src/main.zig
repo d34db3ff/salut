@@ -2,9 +2,12 @@ const std = @import("std");
 const debug = std.debug;
 const fs = std.fs;
 const io = std.io;
+const net = std.net;
 const mem = std.mem;
 const posix = std.posix;
 const stream = std.net.Stream;
+
+const ipc = @import("ipc.zig");
 
 const greeting = "Hello there";
 const prompt = "Username:";
@@ -24,9 +27,19 @@ pub fn main() !void {
     const original = try posix.tcgetattr(tty.handle);
     var raw = original;
     try config_tty(tty, &raw, &win_size);
-    defer restore_tty(tty, original) catch {};
+    defer restore_tty(tty, original) catch {
+        std.debug.print("failed to restore tty", .{});
+    };
 
-    // const ipc_socket = try std.net.connectUnixSocket(std.posix.getenv("GREETD_SOCK").?);
+    const socket_path = posix.getenv("GREETD_SOCK") orelse {
+        std.debug.print("failed to get env GREETD_SOCK", .{});
+        return;
+    };
+
+    const ipc_socket = net.connectUnixSocket(socket_path) catch {
+        std.debug.print("failed to connect to the unix socket {s}", .{socket_path});
+        return;
+    };
 
     var buffer: [1]u8 = undefined;
     while (true) {
@@ -50,9 +63,7 @@ pub fn main() !void {
             // fun fact: backspace actually maps to 0x7F in some terminals
             if (buffer[0] == '\x08' or buffer[0] == '\x7f') {
                 _ = username.popOrNull();
-            } else if (buffer[0] == '\r') {
-                // try create_session(ipc_socket, username.items);
-            } else {
+            } else if (buffer[0] == '\r' or buffer[0] == '\n') {} else {
                 try username.appendSlice(&buffer);
             }
         }
