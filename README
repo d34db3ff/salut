@@ -1,0 +1,13 @@
+salut
+============
+
+I was looking for a TUI login screen which works with PAM (i.e. the fingerprint sensor on my laptop)
+It turns out that most of them just assume that the user uses password as the only way to login.
+
+So I made this little piece of login screen for myself, 
+
+Since it's damn simple, no command line arguments, no config files, and no dependencies!
+
+Just modify the code to meet your needs and recompile, like what you would do with dwm(1).
+
+hopefully this is useful for you, enjoy!
