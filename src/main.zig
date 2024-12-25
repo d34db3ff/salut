@@ -31,21 +31,22 @@ pub fn main() !void {
     var raw = original;
     try config_tty(tty, &raw, &win_size);
     defer restore_tty(tty, original) catch {
-        std.debug.print("failed to restore tty", .{});
+        std.debug.print("salut: failed to restore tty", .{});
     };
 
     const socket_path = posix.getenv("GREETD_SOCK") orelse {
-        std.debug.print("failed to get env GREETD_SOCK", .{});
+        std.debug.print("salut: failed to get env GREETD_SOCK", .{});
         return;
     };
 
     const ipc_socket = net.connectUnixSocket(socket_path) catch {
-        std.debug.print("failed to connect to the unix socket {s}", .{socket_path});
+        std.debug.print("salut: failed to connect to the unix socket {s}", .{socket_path});
         return;
     };
     defer ipc_socket.close();
 
     var buffer: [1]u8 = undefined;
+    // TODO: clean up the mess && move ipc handling logics out of this loop
     while (true) {
         try render(tty, username, msg, win_size);
         _ = try tty.read(&buffer);
@@ -65,7 +66,7 @@ pub fn main() !void {
             raw.cc[@intFromEnum(posix.V.MIN)] = 1;
             try posix.tcsetattr(tty.handle, .NOW, original);
         } else {
-            // fun fact: backspace actually maps to 0x7F in some terminals
+            // fun fact: backspace actually maps to 0x7F on some terminals
             if (buffer[0] == '\x08' or buffer[0] == '\x7f') {
                 _ = username.popOrNull();
             } else if (buffer[0] == '\r' or buffer[0] == '\n') {
@@ -92,8 +93,11 @@ pub fn main() !void {
                     .auth_message => |auth_msg| {
                         try msg.appendSlice(auth_msg.auth_message);
                         std.debug.print("salut: login pending with message {s}", .{auth_msg.auth_message});
-                        std.time.sleep(5_000_000_000);
 
+                        // instead of sending back the password just assume that we are using PAM
+                        const auth_resp: ipc.Request = .{ .post_auth_message_response = .{ .type = "post_auth_message_response", .response = "\n" } };
+                        try auth_resp.send(allocator, ipc_socket);
+                        _ = try ipc.Response.recv(allocator, ipc_socket);
                         // send start_session req
                         const start_req: ipc.Request = .{ .start_session = .{ .type = "start_session", .cmd = &.{command}, .env = &.{} } };
                         try start_req.send(allocator, ipc_socket);
@@ -108,6 +112,7 @@ pub fn main() !void {
     }
 }
 
+/// set up the scenes for our fullscreen terminal application
 fn config_tty(tty: fs.File, raw: *posix.termios, win_size: *posix.winsize) !void {
     // config terminal
     raw.lflag = @as(posix.tc_lflag_t, .{ .ECHO = false, .ICANON = false, .ISIG = false });
@@ -116,7 +121,7 @@ fn config_tty(tty: fs.File, raw: *posix.termios, win_size: *posix.winsize) !void
     raw.cc[@intFromEnum(posix.V.TIME)] = 0;
     raw.cc[@intFromEnum(posix.V.MIN)] = 1;
     try posix.tcsetattr(tty.handle, .FLUSH, raw.*);
-    try tty.writeAll("\x1B[?25l\x1B[s\x1B[?47h\x1B[?1049h");
+    try tty.writeAll("\x1B[?25l\x1B[s\x1B[?47h\x1B[?1049h"); //hide the cursor and start an alternative screen
 
     win_size.* = try get_size(tty);
     // handle window size change
@@ -127,12 +132,15 @@ fn config_tty(tty: fs.File, raw: *posix.termios, win_size: *posix.winsize) !void
     }, null);
 }
 
+/// restore the terminal to its initial state before shutting down,
+/// in case the window manager failed to start
 fn restore_tty(tty: fs.File, attr: posix.termios) !void {
     // restore terminal
     try posix.tcsetattr(tty.handle, .FLUSH, attr);
     try tty.writeAll("\x1B[?1049l\x1B[?47l\x1B[u\x1B[?25h");
 }
 
+/// get window size
 fn get_size(tty: fs.File) !posix.winsize {
     var size = mem.zeroes(posix.winsize);
     const err = posix.system.ioctl(tty.handle, posix.T.IOCGWINSZ, @intFromPtr(&size));
@@ -143,11 +151,13 @@ fn get_size(tty: fs.File) !posix.winsize {
     return size;
 }
 
+/// as its name suggests, this controls cursor movement
 fn move_cursor(tty: fs.File, row: usize, col: usize) !void {
     // line index starts from 1
     _ = try tty.writer().print("\x1B[{};{}H", .{ row + 1, col + 1 });
 }
 
+/// (tty, text, which line, which column, highlight?)
 fn write_line(tty: fs.File, text: []const u8, line_num: usize, col_num: usize, selected: bool) !void {
     if (selected) {
         try tty.writeAll("\x1B[46m"); //set color
@@ -158,6 +168,7 @@ fn write_line(tty: fs.File, text: []const u8, line_num: usize, col_num: usize, s
     try tty.writeAll(text);
 }
 
+/// drawings should happen here
 fn render(tty: fs.File, username: std.ArrayList(u8), msg: std.ArrayList(u8), window_size: posix.winsize) !void {
     try tty.writeAll("\x1B[48;5;236m\x1B[2J\x1B[m"); // set background color
     try write_line(tty, greeting, 1, window_size.ws_col / 2 - greeting.len / 2, false);
@@ -169,7 +180,7 @@ fn render(tty: fs.File, username: std.ArrayList(u8), msg: std.ArrayList(u8), win
     try write_line(tty, username.items, window_size.ws_row / 2, window_size.ws_col / 2, false);
 }
 
-// signal handler for WINCH
+/// the signal handler for WINCH, now empty
 fn sigwinch_handler(_: c_int) callconv(.C) void {
     // tty.writeAll("\x1B[m\x1B[2J") catch unreachable; // clear screen
     // window_size = get_size(tty) catch unreachable;

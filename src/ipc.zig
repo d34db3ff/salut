@@ -15,8 +15,23 @@ pub const Request = union(enum) {
 
     // ======= ipc procedures ========
     pub fn send(self: Request, allocator: mem.Allocator, socket: stream) !void {
+        var msg: []const u8 = &.{};
+
+        switch (self) {
+            .create_session => {
+                msg = try std.json.stringifyAlloc(allocator, self.create_session, .{});
+            },
+            .post_auth_message_response => {
+                msg = try std.json.stringifyAlloc(allocator, self.post_auth_message_response, .{});
+            },
+            .start_session => {
+                msg = try std.json.stringifyAlloc(allocator, self.start_session, .{});
+            },
+            .cancel_session => {
+                msg = try std.json.stringifyAlloc(allocator, self.cancel_session, .{});
+            },
+        }
         const writer = socket.writer();
-        const msg = try std.json.stringifyAlloc(allocator, self.create_session, .{});
         std.debug.print("salut: message to send {s}", .{msg});
         try writer.writeInt(u32, @intCast(msg.len), host_endian);
         writer.writeAll(msg) catch {
@@ -47,7 +62,6 @@ pub const Response = union(enum) {
         const msg_type = val.value.object.get("type").?;
 
         std.debug.print("salut: received message type {s}", .{msg_type.string});
-        std.time.sleep(3_000_000_000);
 
         inline for (std.meta.fields(Response)) |field| {
             if (mem.eql(u8, msg_type.string, field.name)) {
