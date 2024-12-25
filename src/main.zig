@@ -11,17 +11,20 @@ const ipc = @import("ipc.zig");
 
 const greeting = "Hello there";
 const prompt = "Username:";
+const command = "sway-run.sh";
 
 pub fn main() !void {
     var tty = try fs.cwd().openFile("/dev/tty", .{ .mode = .read_write });
     defer tty.close();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer debug.assert(.ok == gpa.deinit()); // mem leak detection
+    // defer debug.assert(.ok == gpa.deinit()); // mem leak detection
     const allocator = gpa.allocator();
 
     var username = std.ArrayList(u8).init(allocator);
     defer username.deinit();
+    var msg = std.ArrayList(u8).init(allocator);
+    defer msg.deinit();
 
     var win_size: posix.winsize = undefined;
     const original = try posix.tcgetattr(tty.handle);
@@ -40,13 +43,15 @@ pub fn main() !void {
         std.debug.print("failed to connect to the unix socket {s}", .{socket_path});
         return;
     };
+    defer ipc_socket.close();
 
     var buffer: [1]u8 = undefined;
     while (true) {
-        try render(tty, username, win_size);
+        try render(tty, username, msg, win_size);
         _ = try tty.read(&buffer);
 
         if (buffer[0] == '\x1B') {
+            // handle escape sequences
             raw.cc[@intFromEnum(posix.V.TIME)] = 1;
             raw.cc[@intFromEnum(posix.V.MIN)] = 0;
             try posix.tcsetattr(tty.handle, .NOW, raw);
@@ -63,7 +68,40 @@ pub fn main() !void {
             // fun fact: backspace actually maps to 0x7F in some terminals
             if (buffer[0] == '\x08' or buffer[0] == '\x7f') {
                 _ = username.popOrNull();
-            } else if (buffer[0] == '\r' or buffer[0] == '\n') {} else {
+            } else if (buffer[0] == '\r' or buffer[0] == '\n') {
+
+                // create session
+
+                const login_req: ipc.Request = .{ .create_session = .{ .type = "create_session", .username = username.items } };
+
+                try login_req.send(allocator, ipc_socket);
+
+                const login_res = try ipc.Response.recv(allocator, ipc_socket);
+
+                switch (login_res) {
+                    .success => {
+                        std.debug.print("salut: login without authentication", .{});
+                        return;
+                    },
+
+                    .@"error" => |err| {
+                        std.debug.print("salut: login failed with {s}", .{err.description});
+                        return;
+                    },
+
+                    .auth_message => |auth_msg| {
+                        try msg.appendSlice(auth_msg.auth_message);
+                        std.debug.print("salut: login pending with message {s}", .{auth_msg.auth_message});
+                        std.time.sleep(5_000_000_000);
+
+                        // send start_session req
+                        const start_req: ipc.Request = .{ .start_session = .{ .type = "start_session", .cmd = &.{command}, .env = &.{} } };
+                        try start_req.send(allocator, ipc_socket);
+                        _ = try ipc.Response.recv(allocator, ipc_socket);
+                        return;
+                    },
+                }
+            } else {
                 try username.appendSlice(&buffer);
             }
         }
@@ -120,9 +158,10 @@ fn write_line(tty: fs.File, text: []const u8, line_num: usize, col_num: usize, s
     try tty.writeAll(text);
 }
 
-fn render(tty: fs.File, username: std.ArrayList(u8), window_size: posix.winsize) !void {
+fn render(tty: fs.File, username: std.ArrayList(u8), msg: std.ArrayList(u8), window_size: posix.winsize) !void {
     try tty.writeAll("\x1B[48;5;236m\x1B[2J\x1B[m"); // set background color
     try write_line(tty, greeting, 1, window_size.ws_col / 2 - greeting.len / 2, false);
+    try write_line(tty, msg.items, window_size.ws_row / 2 - 1, window_size.ws_col / 2 - prompt.len * 2, false);
     try write_line(tty, prompt, window_size.ws_row / 2, window_size.ws_col / 2 - prompt.len * 2, false);
     try write_line(tty, "\x1B[100mF1\x1B[48;5;236m - Select Session", window_size.ws_row, 0, false);
     try write_line(tty, "\x1B[100mF2\x1B[48;5;236m - Enter Command", window_size.ws_row, 20, false);

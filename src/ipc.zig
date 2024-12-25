@@ -8,15 +8,16 @@ const host_endian = builtin.cpu.arch.endian();
 /// requests
 pub const Request = union(enum) {
     // ======= ipc message defs =========
-    CreateSession: struct { type: []const u8, username: []const u8 },
-    PostAuthMessageResponse: struct { type: []const u8, response: []const u8 },
-    StartSession: struct { type: []const u8, cmd: []const []const u8, env: []const []const u8 },
-    CancelSession: struct { type: []const u8 },
+    create_session: struct { type: []const u8, username: []const u8 },
+    post_auth_message_response: struct { type: []const u8, response: []const u8 },
+    start_session: struct { type: []const u8, cmd: []const []const u8, env: []const []const u8 },
+    cancel_session: struct { type: []const u8 },
 
     // ======= ipc procedures ========
     pub fn send(self: Request, allocator: mem.Allocator, socket: stream) !void {
         const writer = socket.writer();
-        const msg = try std.json.stringifyAlloc(allocator, self, .{});
+        const msg = try std.json.stringifyAlloc(allocator, self.create_session, .{});
+        std.debug.print("salut: message to send {s}", .{msg});
         try writer.writeInt(u32, @intCast(msg.len), host_endian);
         writer.writeAll(msg) catch {
             std.debug.print("writing to the socket failed", .{});
@@ -27,28 +28,31 @@ pub const Request = union(enum) {
 /// responses
 pub const Response = union(enum) {
     // ======= ipc message defs =========
-    Success: struct {},
-    Error: struct { error_type: enum { auth_error, @"error" }, description: []const u8 },
-    AuthMessage: struct { auth_message_type: enum { visible, secret, info, @"error" }, auth_message: []const u8 },
+    success: struct {},
+    @"error": struct { error_type: enum { auth_error, @"error" }, description: []const u8 },
+    auth_message: struct { auth_message_type: enum { visible, secret, info, @"error" }, auth_message: []const u8 },
 
     // ======= ipc procedures ========
     pub fn recv(allocator: mem.Allocator, socket: stream) !Response {
         const reader = socket.reader();
-        const length = reader.readInt(u32, host_endian);
-
+        const length = try reader.readInt(u32, host_endian);
         const msg = try allocator.alloc(u8, length);
         defer allocator.free(msg);
 
-        std.debug.assert(reader.readAll(msg).? == length); // crash if length != bytes read
+        std.debug.assert(try reader.readAll(msg) == length); // crash if length != bytes read
 
         const val = try std.json.parseFromSlice(std.json.Value, allocator, msg, .{});
         defer val.deinit();
 
-        const msg_type = val.value.object.get("type");
+        const msg_type = val.value.object.get("type").?;
 
-        for (std.meta.fields(Response)) |field| {
-            if (mem.eql(u8, msg_type, field.name)) {
-                return std.json.parseFromSlice(field.type, msg, .{});
+        std.debug.print("salut: received message type {s}", .{msg_type.string});
+        std.time.sleep(3_000_000_000);
+
+        inline for (std.meta.fields(Response)) |field| {
+            if (mem.eql(u8, msg_type.string, field.name)) {
+                const resp = try std.json.parseFromSliceLeaky(field.type, allocator, msg, .{ .ignore_unknown_fields = true });
+                return @unionInit(Response, field.name, resp);
             }
         }
 
