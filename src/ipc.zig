@@ -6,7 +6,7 @@ const stream = std.net.Stream;
 const host_endian = builtin.cpu.arch.endian();
 
 /// requests
-pub const Request = union(enum) {
+const Request = union(enum) {
     // ======= ipc message defs =========
     create_session: struct { type: []const u8, username: []const u8 },
     post_auth_message_response: struct { type: []const u8, response: []const u8 },
@@ -14,7 +14,7 @@ pub const Request = union(enum) {
     cancel_session: struct { type: []const u8 },
 
     // ======= ipc procedures ========
-    pub fn send(self: Request, allocator: mem.Allocator, socket: stream) !void {
+    fn send(self: Request, allocator: mem.Allocator, socket: stream) !void {
         var msg: []const u8 = &.{};
 
         switch (self) {
@@ -41,14 +41,14 @@ pub const Request = union(enum) {
 };
 
 /// responses
-pub const Response = union(enum) {
+const Response = union(enum) {
     // ======= ipc message defs =========
     success: struct {},
     @"error": struct { error_type: enum { auth_error, @"error" }, description: []const u8 },
     auth_message: struct { auth_message_type: enum { visible, secret, info, @"error" }, auth_message: []const u8 },
 
     // ======= ipc procedures ========
-    pub fn recv(allocator: mem.Allocator, socket: stream) !Response {
+    fn recv(allocator: mem.Allocator, socket: stream) !Response {
         const reader = socket.reader();
         const length = try reader.readInt(u32, host_endian);
         const msg = try allocator.alloc(u8, length);
@@ -74,3 +74,22 @@ pub const Response = union(enum) {
 
     }
 };
+
+pub fn create_session(allocator: std.mem.Allocator, ipc_socket: std.net.Stream, username: []const u8) !Response {
+    const req: Request = .{ .create_session = .{ .type = "create_session", .username = username } };
+    try req.send(allocator, ipc_socket);
+    return try Response.recv(allocator, ipc_socket);
+}
+
+pub fn post_auth_message_response(allocator: std.mem.Allocator, ipc_socket: std.net.Stream) !Response {
+    const req: Request = .{ .post_auth_message_response = .{ .type = "post_auth_message_response", .response = "\n" } };
+    try req.send(allocator, ipc_socket);
+    return try Response.recv(allocator, ipc_socket);
+}
+
+pub fn start_session(allocator: std.mem.Allocator, ipc_socket: std.net.Stream, command: []const []const u8, env: []const []const u8) !Response {
+    // send start_session req
+    const req: Request = .{ .start_session = .{ .type = "start_session", .cmd = command, .env = env } };
+    try req.send(allocator, ipc_socket);
+    return try Response.recv(allocator, ipc_socket);
+}

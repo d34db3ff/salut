@@ -13,6 +13,8 @@ const greeting = "Hello there";
 const prompt = "Username:";
 const command = "sway-run.sh";
 
+const State = struct { pending: bool, in_error: bool };
+
 pub fn main() !void {
     var tty = try fs.cwd().openFile("/dev/tty", .{ .mode = .read_write });
     defer tty.close();
@@ -46,9 +48,22 @@ pub fn main() !void {
     defer ipc_socket.close();
 
     var buffer: [1]u8 = undefined;
-    // TODO: clean up the mess && move ipc handling logics out of this loop
+    var loop_state: State = .{
+        .pending = false,
+        .in_error = false,
+    };
+
     while (true) {
         try render(tty, username, msg, win_size);
+        if (loop_state.pending) {
+            // instead of sending back the password just assume that we are using PAM
+            _ = try ipc.post_auth_message_response(allocator, ipc_socket);
+            const resp = try ipc.start_session(allocator, ipc_socket, &.{command}, &.{});
+            switch (resp) {
+                .success => break,
+                .@"error", .auth_message => continue,
+            }
+        }
         _ = try tty.read(&buffer);
 
         if (buffer[0] == '\x1B') {
@@ -72,37 +87,23 @@ pub fn main() !void {
             } else if (buffer[0] == '\r' or buffer[0] == '\n') {
 
                 // create session
+                const resp = try ipc.create_session(allocator, ipc_socket, username.items);
 
-                const login_req: ipc.Request = .{ .create_session = .{ .type = "create_session", .username = username.items } };
-
-                try login_req.send(allocator, ipc_socket);
-
-                const login_res = try ipc.Response.recv(allocator, ipc_socket);
-
-                switch (login_res) {
+                switch (resp) {
                     .success => {
                         std.debug.print("salut: login without authentication", .{});
-                        return;
                     },
 
                     .@"error" => |err| {
+                        try msg.appendSlice(err.description);
                         std.debug.print("salut: login failed with {s}", .{err.description});
-                        return;
+                        loop_state.in_error = true;
                     },
 
                     .auth_message => |auth_msg| {
                         try msg.appendSlice(auth_msg.auth_message);
                         std.debug.print("salut: login pending with message {s}", .{auth_msg.auth_message});
-
-                        // instead of sending back the password just assume that we are using PAM
-                        const auth_resp: ipc.Request = .{ .post_auth_message_response = .{ .type = "post_auth_message_response", .response = "\n" } };
-                        try auth_resp.send(allocator, ipc_socket);
-                        _ = try ipc.Response.recv(allocator, ipc_socket);
-                        // send start_session req
-                        const start_req: ipc.Request = .{ .start_session = .{ .type = "start_session", .cmd = &.{command}, .env = &.{} } };
-                        try start_req.send(allocator, ipc_socket);
-                        _ = try ipc.Response.recv(allocator, ipc_socket);
-                        return;
+                        loop_state.pending = true;
                     },
                 }
             } else {
@@ -112,7 +113,7 @@ pub fn main() !void {
     }
 }
 
-/// set up the scenes for our fullscreen terminal application
+/// set up the scene for our fullscreen terminal application
 fn config_tty(tty: fs.File, raw: *posix.termios, win_size: *posix.winsize) !void {
     // config terminal
     raw.lflag = @as(posix.tc_lflag_t, .{ .ECHO = false, .ICANON = false, .ISIG = false });

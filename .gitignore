@@ -1,0 +1,5 @@
+*
+!src/*.zig
+!.gitignore
+!LICENSE
+!README
