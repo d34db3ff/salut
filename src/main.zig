@@ -12,6 +12,7 @@ const ipc = @import("ipc.zig");
 const greeting = "Hello there";
 const prompt = "Username:";
 const command = "sway-run.sh";
+// const command = "wayfire";
 
 const State = struct { pending: bool, in_error: bool };
 
@@ -61,7 +62,7 @@ pub fn main() !void {
             const resp = try ipc.start_session(allocator, ipc_socket, &.{command}, &.{});
             switch (resp) {
                 .success => break,
-                .@"error", .auth_message => continue,
+                .@"error", .auth_message => break, // don't bother handling the errors since greetd would restart us anyway.
             }
         }
         _ = try tty.read(&buffer);
@@ -175,17 +176,13 @@ fn render(tty: fs.File, username: std.ArrayList(u8), msg: std.ArrayList(u8), win
     try write_line(tty, greeting, 1, window_size.ws_col / 2 - greeting.len / 2, false);
     try write_line(tty, msg.items, window_size.ws_row / 2 - 1, window_size.ws_col / 2 - prompt.len * 2, false);
     try write_line(tty, prompt, window_size.ws_row / 2, window_size.ws_col / 2 - prompt.len * 2, false);
-    try write_line(tty, "\x1B[100mF1\x1B[48;5;236m - Select Session", window_size.ws_row, 0, false);
-    try write_line(tty, "\x1B[100mF2\x1B[48;5;236m - Enter Command", window_size.ws_row, 20, false);
+    try write_line(tty, "\x1B[100mF1\x1B[48;5;236m - Enter Command", window_size.ws_row, 0, false);
     try tty.writeAll("\x1B[?25h\x1B[1 q"); // restore cursor
     try write_line(tty, username.items, window_size.ws_row / 2, window_size.ws_col / 2, false);
 }
 
 /// the signal handler for WINCH, now empty
 fn sigwinch_handler(_: c_int) callconv(.C) void {
-    // tty.writeAll("\x1B[m\x1B[2J") catch unreachable; // clear screen
-    // window_size = get_size(tty) catch unreachable;
-    // render(tty, get_size(tty)) catch unreachable;
     // to handle window size change in a signal handler we will have to reintroduce global variables
     // well.. this doesn't make sense for a greeter anyway, just crash instead
     unreachable;
