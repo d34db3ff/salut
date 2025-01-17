@@ -1,5 +1,7 @@
 *
 !src/*.zig
+!build.zig
+!build.zig.zon
 !.gitignore
 !LICENSE
 !README
